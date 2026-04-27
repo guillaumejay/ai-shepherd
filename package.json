@@ -1,0 +1,30 @@
+{
+  "name": "ai-shepherd",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.28.2",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.10.1",
+    "chart.js": "4.5.1",
+    "date-fns": "4.1.0",
+    "highlight.js": "11.11.1",
+    "markdown-it": "14.1.1",
+    "pinia": "3.0.4",
+    "vue": "3.5.33"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.10.1",
+    "@types/node": "25.6.0",
+    "@vitejs/plugin-vue": "6.0.6",
+    "typescript": "6.0.3",
+    "vite": "8.0.10",
+    "vue-tsc": "3.2.7"
+  }
+}
