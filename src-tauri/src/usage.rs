@@ -52,6 +52,15 @@ pub struct SessionSummary {
     pub token_limit: Option<u64>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UsageDiagnostics {
+    pub provider_id: String,
+    pub candidate_files: usize,
+    pub parsed_files: usize,
+    pub token_events: usize,
+    pub summaries: usize,
+}
+
 pub trait UsageFileAdapter {
     fn provider_id(&self) -> &'static str;
     fn watch_descriptors(&self) -> Vec<WatchDescriptor>;
@@ -69,6 +78,8 @@ struct UsageGroup<'a> {
 }
 
 impl ClaudeCodeUsageAdapter {
+    const RECENT_FILE_LIMIT: usize = 50;
+
     pub fn new() -> Self {
         Self
     }
@@ -81,6 +92,29 @@ impl ClaudeCodeUsageAdapter {
         files
     }
 
+    fn recent_session_files(&self) -> Vec<PathBuf> {
+        let mut files: Vec<_> = self
+            .candidate_files()
+            .into_iter()
+            .filter(|path| {
+                !path
+                    .components()
+                    .any(|component| component.as_os_str() == "subagents")
+            })
+            .filter_map(|path| {
+                let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+                Some((modified, path))
+            })
+            .collect();
+
+        files.sort_by(|a, b| b.0.cmp(&a.0));
+        files
+            .into_iter()
+            .take(Self::RECENT_FILE_LIMIT)
+            .map(|(_, path)| path)
+            .collect()
+    }
+
     pub fn all_events(&self) -> Result<Vec<UsageEvent>, String> {
         let mut events = Vec::new();
         for file in self.candidate_files() {
@@ -90,12 +124,45 @@ impl ClaudeCodeUsageAdapter {
         }
         Ok(events)
     }
+
+    pub fn diagnostics(&self) -> UsageDiagnostics {
+        let files = self.recent_session_files();
+        let mut parsed_files = 0usize;
+        let mut token_events = 0usize;
+
+        for file in &files {
+            if let Ok(events) = self.parse_file(file) {
+                parsed_files += 1;
+                token_events += events.len();
+            }
+        }
+
+        let summaries = self
+            .current_session_summary()
+            .map_or(0, |items| items.len());
+
+        UsageDiagnostics {
+            provider_id: self.provider_id().to_string(),
+            candidate_files: files.len(),
+            parsed_files,
+            token_events,
+            summaries,
+        }
+    }
 }
 
 impl Default for ClaudeCodeUsageAdapter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub fn current_usage_summaries() -> Result<Vec<SessionSummary>, String> {
+    ClaudeCodeUsageAdapter::new().current_session_summary()
+}
+
+pub fn usage_diagnostics() -> UsageDiagnostics {
+    ClaudeCodeUsageAdapter::new().diagnostics()
 }
 
 impl UsageFileAdapter for ClaudeCodeUsageAdapter {
@@ -117,7 +184,12 @@ impl UsageFileAdapter for ClaudeCodeUsageAdapter {
     }
 
     fn current_session_summary(&self) -> Result<Vec<SessionSummary>, String> {
-        let events = self.all_events()?;
+        let mut events = Vec::new();
+        for file in self.recent_session_files() {
+            if let Ok(mut parsed) = self.parse_file(&file) {
+                events.append(&mut parsed);
+            }
+        }
         let token_events: Vec<_> = events
             .into_iter()
             .filter(|event| event.input_tokens + event.output_tokens > 0)

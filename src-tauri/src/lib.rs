@@ -9,11 +9,13 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    thread,
+    time::Duration,
 };
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager, WindowEvent,
+    Emitter, Manager, WindowEvent,
 };
 
 pub fn run() {
@@ -33,6 +35,7 @@ pub fn run() {
             commands::send_to_pane,
             commands::get_usage_summary,
             commands::get_usage_history,
+            commands::get_usage_diagnostics,
             commands::get_pending_prompts,
             commands::update_settings,
         ])
@@ -63,6 +66,23 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+
+            let app_handle = app.handle().clone();
+            thread::spawn(move || {
+                let emit_usage = |handle: &tauri::AppHandle| {
+                    if let Ok(summary) = crate::usage::current_usage_summaries() {
+                        let _ = handle.emit("usage:updated", summary);
+                    }
+                };
+
+                thread::sleep(Duration::from_secs(2));
+                emit_usage(&app_handle);
+
+                loop {
+                    thread::sleep(Duration::from_secs(10));
+                    emit_usage(&app_handle);
+                }
+            });
 
             Ok(())
         })

@@ -57,3 +57,11 @@ export interface SessionSummary {
   cost: number
   token_limit: number | null
 }
+
+export interface UsageDiagnostics {
+  provider_id: string
+  candidate_files: number
+  parsed_files: number
+  token_events: number
+  summaries: number
+}

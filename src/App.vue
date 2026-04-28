@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core'
-import { onMounted, ref } from 'vue'
-import type { PaneInfo, SessionSummary } from './types'
+import { listen } from '@tauri-apps/api/event'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import type { PaneInfo, SessionSummary, UsageDiagnostics } from './types'
 
 const panes = ref<PaneInfo[]>([])
 const usageSummary = ref<SessionSummary[]>([])
-const usageLoading = ref(false)
+const usageDiagnostics = ref<UsageDiagnostics | null>(null)
+const usageLoading = ref(true)
 const activeTab = ref<'usage' | 'pending' | 'settings'>('usage')
 const error = ref('')
+let unlistenUsage: null | (() => void) = null
+let usageRefreshInterval: ReturnType<typeof setInterval> | null = null
 
 async function refreshPanes() {
   try {
@@ -30,6 +34,17 @@ async function refreshUsage() {
   } finally {
     usageLoading.value = false
   }
+
+  try {
+    usageDiagnostics.value = await invoke<UsageDiagnostics>('get_usage_diagnostics')
+  } catch {
+    usageDiagnostics.value = null
+  }
+}
+
+function refreshAll() {
+  void refreshPanes()
+  void refreshUsage()
 }
 
 function sessionLabel(item: SessionSummary) {
@@ -44,8 +59,26 @@ function sessionLabel(item: SessionSummary) {
   return 'unknown session'
 }
 
-onMounted(async () => {
-  await Promise.all([refreshPanes(), refreshUsage()])
+onMounted(() => {
+  void listen<SessionSummary[]>('usage:updated', (event) => {
+      usageSummary.value = event.payload
+      usageLoading.value = false
+    })
+    .then((unlisten) => {
+      unlistenUsage = unlisten
+    })
+
+  refreshAll()
+  usageRefreshInterval = setInterval(() => {
+    void refreshUsage()
+  }, 10_000)
+})
+
+onBeforeUnmount(() => {
+  void unlistenUsage?.()
+  if (usageRefreshInterval) {
+    clearInterval(usageRefreshInterval)
+  }
 })
 </script>
 
@@ -53,7 +86,7 @@ onMounted(async () => {
   <main class="shell">
     <header>
       <h1>AI Shepherd</h1>
-      <button @click="refreshPanes">Refresh</button>
+      <button @click="refreshAll">Refresh</button>
     </header>
 
     <nav>
@@ -64,8 +97,14 @@ onMounted(async () => {
 
     <section v-if="activeTab === 'usage'">
       <h2>Usage Monitor</h2>
-      <p v-if="usageLoading">Loading usage...</p>
-      <p v-else-if="usageSummary.length === 0">No Claude Code usage files found yet.</p>
+      <p v-if="usageLoading">Loading Claude Code usage from recent session files...</p>
+      <p v-else-if="usageSummary.length === 0">
+        No Claude Code usage files found yet.
+        <span v-if="usageDiagnostics">
+          Checked {{ usageDiagnostics.candidate_files }} JSONL files,
+          parsed {{ usageDiagnostics.token_events }} token events.
+        </span>
+      </p>
       <ul v-else>
         <li v-for="(item, index) in usageSummary" :key="`${item.provider_id}:${item.session_id ?? 'unknown'}:${index}`">
           <strong>{{ item.provider_id }}</strong>

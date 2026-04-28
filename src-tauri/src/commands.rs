@@ -1,6 +1,8 @@
 use crate::{
     terminal::{PaneInfo, TerminalAdapter, WezTermAdapter},
-    usage::{ClaudeCodeUsageAdapter, SessionSummary, UsageEvent, UsageFileAdapter},
+    usage::{
+        ClaudeCodeUsageAdapter, SessionSummary, UsageDiagnostics, UsageEvent, UsageFileAdapter,
+    },
 };
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -33,6 +35,12 @@ pub fn get_usage_summary() -> Result<Vec<SessionSummary>, String> {
 pub fn get_usage_history() -> Result<Vec<UsageEvent>, String> {
     ClaudeCodeUsageAdapter::new().all_events()
 }
+
+#[tauri::command]
+pub fn get_usage_diagnostics() -> UsageDiagnostics {
+    crate::usage::usage_diagnostics()
+}
+
 #[tauri::command]
 pub fn get_pending_prompts() -> Result<Vec<PendingPrompt>, String> {
     Ok(vec![])
