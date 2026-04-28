@@ -1,13 +1,8 @@
-use crate::terminal::{PaneInfo, TerminalAdapter, WezTermAdapter};
+use crate::{
+    terminal::{PaneInfo, TerminalAdapter, WezTermAdapter},
+    usage::{ClaudeCodeUsageAdapter, SessionSummary, UsageEvent, UsageFileAdapter},
+};
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UsageSummary {
-    pub items: Vec<String>,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UsageEvent {
-    pub value: String,
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingPrompt {
     pub value: String,
@@ -31,12 +26,12 @@ pub fn send_to_pane(pane_id: String, text: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 #[tauri::command]
-pub fn get_usage_summary() -> Result<UsageSummary, String> {
-    Ok(UsageSummary { items: vec![] })
+pub fn get_usage_summary() -> Result<Vec<SessionSummary>, String> {
+    ClaudeCodeUsageAdapter::new().current_session_summary()
 }
 #[tauri::command]
 pub fn get_usage_history() -> Result<Vec<UsageEvent>, String> {
-    Ok(vec![])
+    ClaudeCodeUsageAdapter::new().all_events()
 }
 #[tauri::command]
 pub fn get_pending_prompts() -> Result<Vec<PendingPrompt>, String> {

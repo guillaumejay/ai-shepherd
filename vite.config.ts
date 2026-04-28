@@ -4,5 +4,5 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   base: './',
   plugins: [vue()],
-  server: { strictPort: true, port: 5173 },
+  server: { strictPort: true, port: 6001 },
 })

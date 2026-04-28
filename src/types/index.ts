@@ -26,3 +26,34 @@ export interface PaneInfo {
   process_name: string | null
   last_seen: string
 }
+
+export type AccountType = 'unknown'
+export type UsagePeriod = 'current'
+
+export interface WatchDescriptor {
+  path: string
+}
+
+export interface UsageEvent {
+  provider_id: string
+  source_file: string
+  timestamp: string | null
+  session_id: string | null
+  session_title: string | null
+  model: string | null
+  input_tokens: number
+  output_tokens: number
+  requests_used: number
+}
+
+export interface SessionSummary {
+  provider_id: string
+  account_type: AccountType
+  period: UsagePeriod
+  session_id: string | null
+  session_title: string | null
+  tokens_used: number
+  requests_used: number
+  cost: number
+  token_limit: number | null
+}

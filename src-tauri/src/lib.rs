@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod platform;
 pub mod terminal;
+pub mod usage;
 
 use std::{
     process,
@@ -16,6 +17,12 @@ use tauri::{
 };
 
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    std::env::set_var(
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+        "--disable-logging --log-level=3",
+    );
+
     let intentional_quit = Arc::new(AtomicBool::new(false));
     let tray_quit = Arc::clone(&intentional_quit);
 
