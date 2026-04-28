@@ -70,7 +70,10 @@ pub fn run() {
             let app_handle = app.handle().clone();
             thread::spawn(move || {
                 let emit_usage = |handle: &tauri::AppHandle| {
-                    if let Ok(summary) = crate::usage::current_usage_summaries() {
+                    let _ = crate::usage::ingest_recent_usage_events();
+                    if let Ok(summary) = crate::usage::stored_usage_summaries()
+                        .or_else(|_| crate::usage::current_usage_summaries())
+                    {
                         let _ = handle.emit("usage:updated", summary);
                     }
                 };

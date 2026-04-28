@@ -1,5 +1,6 @@
 use crate::platform::PathResolver;
 use chrono::{DateTime, Utc};
+use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -7,6 +8,7 @@ use std::{
     fs::File,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -28,6 +30,7 @@ pub struct WatchDescriptor {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UsageEvent {
+    pub event_key: String,
     pub provider_id: String,
     pub source_file: String,
     pub timestamp: Option<DateTime<Utc>>,
@@ -69,6 +72,8 @@ pub trait UsageFileAdapter {
 }
 
 pub struct ClaudeCodeUsageAdapter;
+
+struct UsageStore;
 
 struct UsageGroup<'a> {
     session_id: Option<String>,
@@ -151,6 +156,100 @@ impl ClaudeCodeUsageAdapter {
     }
 }
 
+impl UsageStore {
+    fn db_path() -> PathBuf {
+        PathResolver::data_dir().join("usage.db")
+    }
+
+    fn open() -> Result<Connection, String> {
+        std::fs::create_dir_all(PathResolver::data_dir()).map_err(|e| e.to_string())?;
+        let conn = Connection::open_with_flags(
+            Self::db_path(),
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+        )
+        .map_err(|e| e.to_string())?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(|e| e.to_string())?;
+        Ok(conn)
+    }
+
+    fn ensure_schema(conn: &Connection) -> Result<(), String> {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS usage_events (
+                event_key TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL,
+                source_file TEXT NOT NULL,
+                timestamp TEXT,
+                session_id TEXT,
+                session_title TEXT,
+                model TEXT,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                requests_used INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_usage_events_timestamp ON usage_events(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_usage_events_provider ON usage_events(provider_id);
+            "#,
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    fn load_events(conn: &Connection, limit: usize) -> Result<Vec<UsageEvent>, String> {
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT event_key, provider_id, source_file, timestamp, session_id, session_title, model,
+                       input_tokens, output_tokens, requests_used
+                FROM usage_events
+                ORDER BY timestamp IS NULL, timestamp DESC, rowid DESC
+                LIMIT ?1
+                "#,
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                let timestamp: Option<String> = row.get(3)?;
+                Ok(UsageEvent {
+                    event_key: row.get(0)?,
+                    provider_id: row.get(1)?,
+                    source_file: row.get(2)?,
+                    timestamp: timestamp
+                        .as_deref()
+                        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&Utc)),
+                    session_id: row.get(4)?,
+                    session_title: row.get(5)?,
+                    model: row.get(6)?,
+                    input_tokens: row.get::<_, i64>(7)? as u64,
+                    output_tokens: row.get::<_, i64>(8)? as u64,
+                    requests_used: row.get::<_, i64>(9)? as u64,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    fn stored_summaries(conn: &Connection) -> Result<Vec<SessionSummary>, String> {
+        let events = Self::load_events(conn, 1000)?;
+        if events.is_empty() {
+            return ClaudeCodeUsageAdapter::new().current_session_summary();
+        }
+        Ok(summaries_from_events(
+            &events,
+            ClaudeCodeUsageAdapter::new().provider_id(),
+        ))
+    }
+}
+
+fn ingestion_guard() -> &'static Mutex<()> {
+    static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    GUARD.get_or_init(|| Mutex::new(()))
+}
+
 impl Default for ClaudeCodeUsageAdapter {
     fn default() -> Self {
         Self::new()
@@ -159,6 +258,75 @@ impl Default for ClaudeCodeUsageAdapter {
 
 pub fn current_usage_summaries() -> Result<Vec<SessionSummary>, String> {
     ClaudeCodeUsageAdapter::new().current_session_summary()
+}
+
+pub fn ingest_recent_usage_events() -> Result<usize, String> {
+    let _lock = ingestion_guard().lock().map_err(|e| e.to_string())?;
+    let adapter = ClaudeCodeUsageAdapter::new();
+    let conn = UsageStore::open()?;
+    UsageStore::ensure_schema(&conn)?;
+
+    let mut conn = conn;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let mut stmt = tx
+        .prepare_cached(
+            r#"
+            INSERT INTO usage_events (
+                event_key, provider_id, source_file, timestamp, session_id,
+                session_title, model, input_tokens, output_tokens, requests_used
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ON CONFLICT(event_key) DO UPDATE SET
+                provider_id = excluded.provider_id,
+                source_file = excluded.source_file,
+                timestamp = excluded.timestamp,
+                session_id = excluded.session_id,
+                session_title = excluded.session_title,
+                model = excluded.model,
+                input_tokens = excluded.input_tokens,
+                output_tokens = excluded.output_tokens,
+                requests_used = excluded.requests_used
+            "#,
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut affected = 0usize;
+    for file in adapter.recent_session_files() {
+        let parsed = match adapter.parse_file(&file) {
+            Ok(events) => events,
+            Err(_) => continue,
+        };
+        for event in parsed {
+            affected += stmt
+                .execute(params![
+                    event.event_key,
+                    event.provider_id,
+                    event.source_file,
+                    event.timestamp.map(|ts| ts.to_rfc3339()),
+                    event.session_id,
+                    event.session_title,
+                    event.model,
+                    event.input_tokens,
+                    event.output_tokens,
+                    event.requests_used,
+                ])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    drop(stmt);
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(affected)
+}
+
+pub fn stored_usage_history() -> Result<Vec<UsageEvent>, String> {
+    let conn = UsageStore::open()?;
+    UsageStore::ensure_schema(&conn)?;
+    UsageStore::load_events(&conn, 1000)
+}
+
+pub fn stored_usage_summaries() -> Result<Vec<SessionSummary>, String> {
+    let conn = UsageStore::open()?;
+    UsageStore::ensure_schema(&conn)?;
+    UsageStore::stored_summaries(&conn)
 }
 
 pub fn usage_diagnostics() -> UsageDiagnostics {
@@ -190,90 +358,97 @@ impl UsageFileAdapter for ClaudeCodeUsageAdapter {
                 events.append(&mut parsed);
             }
         }
-        let token_events: Vec<_> = events
-            .into_iter()
-            .filter(|event| event.input_tokens + event.output_tokens > 0)
-            .collect();
-
-        if token_events.is_empty() {
+        if events.is_empty() {
             return Ok(vec![]);
         }
+        Ok(summaries_from_events(&events, self.provider_id()))
+    }
+}
 
-        let now = Utc::now();
-        let window_start = now - chrono::Duration::hours(5);
-        let timestamped_in_window = token_events
+fn summaries_from_events(events: &[UsageEvent], provider_id: &str) -> Vec<SessionSummary> {
+    let token_events: Vec<_> = events
+        .iter()
+        .filter(|event| event.input_tokens + event.output_tokens > 0)
+        .collect();
+
+    if token_events.is_empty() {
+        return vec![];
+    }
+
+    let now = Utc::now();
+    let window_start = now - chrono::Duration::hours(5);
+    let timestamped_in_window = token_events
+        .iter()
+        .any(|event| event.timestamp.is_some_and(|ts| ts >= window_start));
+
+    let selected_events: Vec<&UsageEvent> = if timestamped_in_window {
+        token_events
+            .into_iter()
+            .filter(|event| event.timestamp.is_some_and(|ts| ts >= window_start))
+            .collect()
+    } else {
+        let latest_date = token_events
             .iter()
-            .any(|event| event.timestamp.is_some_and(|ts| ts >= window_start));
+            .filter_map(|event| event.timestamp.map(|ts| ts.date_naive()))
+            .max();
 
-        let selected_events: Vec<&UsageEvent> = if timestamped_in_window {
-            token_events
-                .iter()
-                .filter(|event| event.timestamp.is_some_and(|ts| ts >= window_start))
-                .collect()
-        } else {
-            let latest_date = token_events
-                .iter()
-                .filter_map(|event| event.timestamp.map(|ts| ts.date_naive()))
-                .max();
+        match latest_date {
+            Some(date) => token_events
+                .into_iter()
+                .filter(|event| event.timestamp.is_some_and(|ts| ts.date_naive() == date))
+                .collect(),
+            None => token_events.into_iter().collect(),
+        }
+    };
 
-            match latest_date {
-                Some(date) => token_events
-                    .iter()
-                    .filter(|event| event.timestamp.is_some_and(|ts| ts.date_naive() == date))
-                    .collect(),
-                None => token_events.iter().collect(),
-            }
+    if selected_events.is_empty() {
+        return vec![];
+    }
+
+    let mut grouped: HashMap<String, UsageGroup<'_>> = HashMap::new();
+    for event in selected_events {
+        let (group_id, session_id) = match event.session_id.as_ref() {
+            Some(session_id) => (format!("session:{session_id}"), Some(session_id.clone())),
+            None => (format!("file:{}", event.source_file), None),
         };
 
-        if selected_events.is_empty() {
-            return Ok(vec![]);
+        let entry = grouped.entry(group_id).or_insert_with(|| UsageGroup {
+            session_id,
+            session_title: event.session_title.clone(),
+            events: Vec::new(),
+            latest: event.timestamp,
+        });
+
+        if entry.session_title.is_none() {
+            entry.session_title = event.session_title.clone();
         }
-
-        let mut grouped: HashMap<String, UsageGroup<'_>> = HashMap::new();
-        for event in selected_events {
-            let (group_id, session_id) = match event.session_id.as_ref() {
-                Some(session_id) => (format!("session:{session_id}"), Some(session_id.clone())),
-                None => (format!("file:{}", event.source_file), None),
-            };
-
-            let entry = grouped.entry(group_id).or_insert_with(|| UsageGroup {
-                session_id,
-                session_title: event.session_title.clone(),
-                events: Vec::new(),
-                latest: event.timestamp,
-            });
-
-            if entry.session_title.is_none() {
-                entry.session_title = event.session_title.clone();
-            }
-            entry.events.push(event);
-            if event.timestamp > entry.latest {
-                entry.latest = event.timestamp;
-            }
+        entry.events.push(event);
+        if event.timestamp > entry.latest {
+            entry.latest = event.timestamp;
         }
-
-        let mut grouped: Vec<_> = grouped.into_values().collect();
-        grouped.sort_by(|a, b| b.latest.cmp(&a.latest));
-
-        Ok(grouped
-            .into_iter()
-            .map(|group| SessionSummary {
-                provider_id: self.provider_id().to_string(),
-                account_type: AccountType::Unknown,
-                period: UsagePeriod::Current,
-                session_id: group.session_id,
-                session_title: group.session_title,
-                tokens_used: group
-                    .events
-                    .iter()
-                    .map(|event| event.input_tokens + event.output_tokens)
-                    .sum(),
-                requests_used: group.events.iter().map(|event| event.requests_used).sum(),
-                cost: 0.0,
-                token_limit: None,
-            })
-            .collect())
     }
+
+    let mut grouped: Vec<_> = grouped.into_values().collect();
+    grouped.sort_by(|a, b| b.latest.cmp(&a.latest));
+
+    grouped
+        .into_iter()
+        .map(|group| SessionSummary {
+            provider_id: provider_id.to_string(),
+            account_type: AccountType::Unknown,
+            period: UsagePeriod::Current,
+            session_id: group.session_id,
+            session_title: group.session_title,
+            tokens_used: group
+                .events
+                .iter()
+                .map(|event| event.input_tokens + event.output_tokens)
+                .sum(),
+            requests_used: group.events.iter().map(|event| event.requests_used).sum(),
+            cost: 0.0,
+            token_limit: None,
+        })
+        .collect()
 }
 
 fn collect_jsonl_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -293,9 +468,13 @@ fn collect_jsonl_files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn parse_jsonl_file(path: &Path, provider_id: &str) -> Result<Vec<UsageEvent>, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let reader = BufReader::new(file);
-    let mut values = Vec::new();
+    let mut values: Vec<(usize, serde_json::Value)> = Vec::new();
 
-    for line in reader.lines().map_while(Result::ok) {
+    for (line_number, line) in reader
+        .lines()
+        .enumerate()
+        .filter_map(|(idx, line)| line.ok().map(|l| (idx + 1, l)))
+    {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -303,14 +482,14 @@ fn parse_jsonl_file(path: &Path, provider_id: &str) -> Result<Vec<UsageEvent>, S
         let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
             continue;
         };
-        values.push(value);
+        values.push((line_number, value));
     }
 
     let mut session_titles: HashMap<String, String> = HashMap::new();
     let mut custom_title: Option<String> = None;
     let mut ai_title: Option<String> = None;
     let mut first_user_label: Option<String> = None;
-    for value in &values {
+    for (_, value) in &values {
         if let Some(title) = extract_explicit_session_title(value) {
             if let Some(session_id) = extract_session_id(value) {
                 session_titles.insert(session_id, title.clone());
@@ -329,7 +508,7 @@ fn parse_jsonl_file(path: &Path, provider_id: &str) -> Result<Vec<UsageEvent>, S
     let file_session_label = custom_title.or(ai_title).or(first_user_label);
 
     let mut events = Vec::new();
-    for value in values {
+    for (line_number, value) in values.into_iter() {
         let input_tokens = nested_u64(&value, &["usage", "input_tokens"])
             .or_else(|| nested_u64(&value, &["message", "usage", "input_tokens"]))
             .unwrap_or(0);
@@ -355,6 +534,7 @@ fn parse_jsonl_file(path: &Path, provider_id: &str) -> Result<Vec<UsageEvent>, S
             .or_else(|| nested_string(&value, &["message", "model"]));
 
         events.push(UsageEvent {
+            event_key: format!("{}|{}|{}", provider_id, path.to_string_lossy(), line_number),
             provider_id: provider_id.to_string(),
             source_file: path.to_string_lossy().to_string(),
             timestamp,
