@@ -45,8 +45,14 @@ pub struct PaneInfo {
     pub shell: ShellType,
     pub context: ShellContext,
     pub process_name: Option<String>,
+    pub ai_tool: Option<String>,
+    pub ai_tool_source: Option<String>,
+    pub ai_tool_match: Option<String>,
+    pub ai_tool_sample_chars: usize,
+    pub ai_tool_capture_error: Option<String>,
     pub last_seen: DateTime<Utc>,
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TerminalCapabilities {
     pub list_panes: bool,
@@ -83,6 +89,7 @@ pub struct WezTermAdapter {
 
 impl WezTermAdapter {
     const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+    const AI_SAMPLE_LIMIT: usize = 12_000;
 
     pub fn new() -> Self {
         Self {
@@ -132,6 +139,48 @@ impl WezTermAdapter {
             .wait_with_output()
             .map_err(|e| AdapterError::Io(e.to_string()))
     }
+
+    fn detect_ai_tool(
+        &self,
+        title: &str,
+        cwd: Option<&str>,
+        process_name: Option<&str>,
+        sample: &str,
+    ) -> Option<(String, String, String)> {
+        let haystacks = [
+            ("title", title),
+            ("cwd", cwd.unwrap_or("")),
+            ("process_name", process_name.unwrap_or("")),
+            ("sample", sample),
+        ];
+        let tools = [
+            ("OpenCode", ["opencode", "open code", "open-code"].as_slice()),
+            ("Claude", ["claude"].as_slice()),
+            ("Codex", ["codex"].as_slice()),
+            ("Gemini", ["gemini"].as_slice()),
+        ];
+
+        for (source, text) in haystacks {
+            let lower = text.to_lowercase();
+            for (tool, keywords) in tools {
+                for keyword in keywords {
+                    if lower.contains(keyword) {
+                        return Some((tool.into(), source.into(), (*keyword).into()));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn pane_id_string(value: serde_json::Value) -> String {
+        match value {
+            serde_json::Value::String(value) => value,
+            serde_json::Value::Number(value) => value.to_string(),
+            other => other.to_string(),
+        }
+    }
 }
 
 impl Default for WezTermAdapter {
@@ -176,18 +225,43 @@ impl TerminalAdapter for WezTermAdapter {
             serde_json::from_slice(&out.stdout).map_err(|e| AdapterError::Json(e.to_string()))?;
         Ok(raw
             .into_iter()
-            .map(|p| PaneInfo {
-                id: p.pane_id.to_string(),
-                terminal_adapter: self.id().into(),
-                title: p.title.unwrap_or_default(),
-                cwd: p.cwd.map(|raw| CwdLocation {
-                    normalized: None,
-                    raw,
-                }),
-                shell: ShellType::Unknown("unknown".into()),
-                context: ShellContext::Native,
-                process_name: None,
-                last_seen: Utc::now(),
+            .map(|p| {
+                let pane_id = Self::pane_id_string(p.pane_id);
+                let mut capture_error = None;
+                let sample = match self.capture_pane(&pane_id) {
+                    Ok(text) => {
+                        let chars = text.chars().collect::<Vec<_>>();
+                        let start = chars.len().saturating_sub(Self::AI_SAMPLE_LIMIT);
+                        chars[start..].iter().collect::<String>()
+                    }
+                    Err(error) => {
+                        capture_error = Some(error.to_string());
+                        String::new()
+                    }
+                };
+                let sample_chars = sample.chars().count();
+                let title = p.title.unwrap_or_default();
+                let cwd_raw = p.cwd;
+                let ai_tool = self.detect_ai_tool(&title, cwd_raw.as_deref(), None, &sample);
+
+                PaneInfo {
+                    id: pane_id,
+                    terminal_adapter: self.id().into(),
+                    title,
+                    cwd: cwd_raw.map(|raw| CwdLocation {
+                        normalized: None,
+                        raw,
+                    }),
+                    shell: ShellType::Unknown("unknown".into()),
+                    context: ShellContext::Native,
+                    process_name: None,
+                    ai_tool: ai_tool.as_ref().map(|(tool, _, _)| tool.clone()),
+                    ai_tool_source: ai_tool.as_ref().map(|(_, source, _)| source.clone()),
+                    ai_tool_match: ai_tool.as_ref().map(|(_, _, matched)| matched.clone()),
+                    ai_tool_sample_chars: sample_chars,
+                    ai_tool_capture_error: capture_error,
+                    last_seen: Utc::now(),
+                }
             })
             .collect())
     }

@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-04-28T00:00:00.000Z",
+  "title": "Design System: AI Shepherd",
+  "extensions": {
+    "colorMeta": {
+      "daylight-bg": {
+        "role": "neutral",
+        "displayName": "Daylight Background",
+        "canonical": "oklch(0.97 0.01 95)",
+        "tonalRamp": ["oklch(0.18 0.01 95)", "oklch(0.28 0.012 95)", "oklch(0.40 0.014 95)", "oklch(0.55 0.014 95)", "oklch(0.70 0.012 95)", "oklch(0.82 0.011 95)", "oklch(0.91 0.01 95)", "oklch(0.97 0.01 95)"]
+      },
+      "moss-accent": {
+        "role": "primary",
+        "displayName": "Moss Accent",
+        "canonical": "oklch(0.66 0.12 150)",
+        "tonalRamp": ["oklch(0.18 0.04 150)", "oklch(0.28 0.06 150)", "oklch(0.40 0.08 150)", "oklch(0.52 0.10 150)", "oklch(0.66 0.12 150)", "oklch(0.76 0.10 150)", "oklch(0.86 0.07 150)", "oklch(0.94 0.04 150)"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "App title and rare empty-state headings." },
+      "body": { "displayName": "Body", "purpose": "Dense utility UI copy." },
+      "mono": { "displayName": "Mono", "purpose": "Paths, IDs, shells, tokens, and timestamps." }
+    },
+    "shadows": [
+      { "name": "hairline-rest", "value": "0 1px 2px oklch(0.24 0.02 95 / 0.06)", "purpose": "Tiny lift for top bar or selected controls." },
+      { "name": "panel-lift", "value": "0 8px 24px oklch(0.24 0.02 95 / 0.08)", "purpose": "Focused detail panels and overlays." }
+    ],
+    "motion": [
+      { "name": "ease-out-quart", "value": "cubic-bezier(0.25, 1, 0.5, 1)", "purpose": "Default state changes." },
+      { "name": "control-fast", "value": "160ms", "purpose": "Buttons, tabs, chips, and row hover." }
+    ],
+    "breakpoints": [
+      { "name": "compact", "value": "720px" },
+      { "name": "wide", "value": "1100px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Primary local action, such as refresh or focus pane.",
+      "html": "<button class=\"ds-btn-primary\">Refresh</button>",
+      "css": ".ds-btn-primary { background: oklch(0.66 0.12 150); color: oklch(0.24 0.02 95); border: 1px solid oklch(0.58 0.10 150); border-radius: 10px; padding: 10px 14px; font: 600 12px/1.4 IBM Plex Sans, Manrope, system-ui, sans-serif; transition: background-color 160ms cubic-bezier(0.25, 1, 0.5, 1), border-color 160ms cubic-bezier(0.25, 1, 0.5, 1), transform 160ms cubic-bezier(0.25, 1, 0.5, 1); } .ds-btn-primary:hover { background: oklch(0.70 0.12 150); transform: translateY(-1px); } .ds-btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(0.72 0.12 150 / 0.35); }"
+    },
+    {
+      "name": "Local Status Chip",
+      "kind": "chip",
+      "refersTo": "chip-local",
+      "description": "Small trust signal for local monitoring state.",
+      "html": "<span class=\"ds-chip-local\">Stored locally</span>",
+      "css": ".ds-chip-local { display: inline-flex; align-items: center; gap: 6px; background: oklch(0.89 0.05 150); color: oklch(0.24 0.02 95); border: 1px solid oklch(0.78 0.06 150); border-radius: 999px; padding: 4px 10px; font: 600 12px/1.4 IBM Plex Sans, Manrope, system-ui, sans-serif; } .ds-chip-local::before { content: ''; width: 7px; height: 7px; border-radius: 999px; background: oklch(0.66 0.12 150); }"
+    },
+    {
+      "name": "Summary Card",
+      "kind": "card",
+      "refersTo": "card-summary",
+      "description": "Compact usage summary with one dominant reading.",
+      "html": "<section class=\"ds-summary-card\"><p class=\"ds-summary-label\">Tokens used</p><p class=\"ds-summary-value\">42.1k</p></section>",
+      "css": ".ds-summary-card { background: oklch(0.95 0.012 95); color: oklch(0.24 0.02 95); border: 1px solid oklch(0.82 0.014 95); border-radius: 16px; padding: 16px; box-shadow: 0 1px 2px oklch(0.24 0.02 95 / 0.06); } .ds-summary-label { margin: 0 0 8px; color: oklch(0.44 0.02 95); font: 600 12px/1.4 IBM Plex Sans, Manrope, system-ui, sans-serif; } .ds-summary-value { margin: 0; font: 600 28px/1.2 Fraunces, Source Serif 4, Georgia, serif; font-variant-numeric: tabular-nums; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Instrument Panel",
+    "overview": "AI Shepherd should look like a calm local instrument beside the user's editor and terminal. It is warm, disciplined, and easy to scan, with enough technical detail to earn trust and enough softness to avoid management-console coldness.",
+    "keyCharacteristics": [
+      "Product UI, not marketing theater.",
+      "Restrained color strategy: tinted neutrals plus one moss accent under 10 percent of a screen.",
+      "Local-first posture visible through status, copy, and hierarchy."
+    ],
+    "rules": [
+      { "name": "The Ten Percent Moss Rule", "body": "Moss is a signal, not decoration. If every card or row uses it, the monitor stops being glanceable.", "section": "colors" },
+      { "name": "The No Neon Rule", "body": "Prohibited: neon-on-black, glowing outlines, purple SaaS gradients, and synthetic terminal theatrics.", "section": "colors" },
+      { "name": "The Flat At Rest Rule", "body": "Lists, cards, and panels are calm until interaction. Hover may shift color or shadow, but never layout.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use daylight neutrals and moss accent to make local monitoring feel calm and trustworthy.",
+      "Do keep the first read glanceable: active state, last refresh, pending prompts, and current usage.",
+      "Do show technical detail where it helps: model, source file, terminal pane, cwd, shell, tokens, and timestamps."
+    ],
+    "donts": [
+      "Don't use crypto-terminal styling: neon-on-black, hacker theatrics, aggressive contrast, or synthetic glow.",
+      "Don't use enterprise admin dashboards: cold CRUD tables, generic panels, dense chrome, or management-console language.",
+      "Don't use AI SaaS clichés: purple gradients, glass cards, hype copy, generic hero metrics, or unlock insights language."
+    ]
+  }
+}

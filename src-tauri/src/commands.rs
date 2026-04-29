@@ -46,6 +46,7 @@ pub fn get_usage_diagnostics() -> UsageDiagnostics {
 pub fn get_pending_prompts() -> Result<Vec<PendingPrompt>, String> {
     Ok(vec![])
 }
+
 #[tauri::command]
 pub fn update_settings(_settings: String) -> Result<(), String> {
     Ok(())

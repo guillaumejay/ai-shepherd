@@ -24,6 +24,11 @@ export interface PaneInfo {
   shell: ShellType
   context: ShellContext
   process_name: string | null
+  ai_tool: string | null
+  ai_tool_source: string | null
+  ai_tool_match: string | null
+  ai_tool_sample_chars: number
+  ai_tool_capture_error: string | null
   last_seen: string
 }
 
