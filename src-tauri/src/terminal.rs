@@ -154,7 +154,10 @@ impl WezTermAdapter {
             ("sample", sample),
         ];
         let tools = [
-            ("OpenCode", ["opencode", "open code", "open-code"].as_slice()),
+            (
+                "OpenCode",
+                ["opencode", "open code", "open-code"].as_slice(),
+            ),
             ("Claude", ["claude"].as_slice()),
             ("Codex", ["codex"].as_slice()),
             ("Gemini", ["gemini"].as_slice()),
@@ -163,6 +166,10 @@ impl WezTermAdapter {
         for (source, text) in haystacks {
             let lower = text.to_lowercase();
             for (tool, keywords) in tools {
+                if source == "sample" && tool == "Codex" {
+                    continue;
+                }
+
                 for keyword in keywords {
                     if lower.contains(keyword) {
                         return Some((tool.into(), source.into(), (*keyword).into()));

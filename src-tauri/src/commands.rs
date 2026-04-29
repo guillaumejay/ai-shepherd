@@ -1,8 +1,8 @@
 use crate::{
     terminal::{PaneInfo, TerminalAdapter, WezTermAdapter},
     usage::{
-        current_usage_summaries, stored_usage_history, stored_usage_summaries,
-        ClaudeCodeUsageAdapter, SessionSummary, UsageDiagnostics, UsageEvent,
+        current_usage_history, current_usage_summaries, stored_usage_history,
+        stored_usage_summaries, SessionSummary, UsageDiagnostics, UsageEvent,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -34,7 +34,7 @@ pub fn get_usage_summary() -> Result<Vec<SessionSummary>, String> {
 }
 #[tauri::command]
 pub fn get_usage_history() -> Result<Vec<UsageEvent>, String> {
-    stored_usage_history().or_else(|_| ClaudeCodeUsageAdapter::new().all_events())
+    stored_usage_history().or_else(|_| current_usage_history())
 }
 
 #[tauri::command]
